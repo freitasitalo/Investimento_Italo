@@ -40,9 +40,13 @@ def _get_sheet():
 @st.cache_data(ttl=300, show_spinner=False)
 def get_operacoes() -> pd.DataFrame:
     ws = _get_sheet().worksheet(ABA_OPERACOES)
-    records = ws.get_all_records(expected_headers=[
-        "Data", "Ticker", "Empresa", "Tipo C/V", "Qtd", "Preço R$", "Total R$", "Observação"
-    ])
+    # UNFORMATTED_VALUE retorna o número bruto (9.5) em vez do texto formatado ("9,50")
+    records = ws.get_all_records(
+        expected_headers=[
+            "Data", "Ticker", "Empresa", "Tipo C/V", "Qtd", "Preço R$", "Total R$", "Observação"
+        ],
+        value_render_option="UNFORMATTED_VALUE",
+    )
     return pd.DataFrame(records) if records else pd.DataFrame(
         columns=["Data", "Ticker", "Empresa", "Tipo C/V", "Qtd", "Preço R$", "Total R$", "Observação"]
     )
