@@ -107,13 +107,20 @@ def render(portfolio_result: dict, df_carteira: pd.DataFrame,
                 "acumulado histórico",
                 _color_result(resultado_realizado))
 
-    # Status atualização
+    # Nota fixa sobre preços manuais
     st.markdown("<br>", unsafe_allow_html=True)
-    if ultima_atualizacao:
-        st.markdown(
-            f'<div style="color:#4A6B85;font-size:11px;font-family:monospace;">⏱ Preços atualizados em: {ultima_atualizacao}</div>',
-            unsafe_allow_html=True,
-        )
+    data_ref = ultima_atualizacao or "—"
+    sem_preco = [tk for tk, info in prices.items() if info.get("preco") is None]
+    sem_preco_str = f" | Sem preço: {', '.join(sem_preco)}" if sem_preco else ""
+    st.markdown(f"""
+    <div style="background:#0D1B2A;border:1px solid #1A3550;border-left:3px solid #F0B429;
+                border-radius:6px;padding:12px 16px;font-family:monospace;font-size:11px;color:#7A9BB5">
+        ⚠ <strong style="color:#F0B429">Preços atualizados manualmente na planilha.</strong>
+        Última referência: <span style="color:#E8F4FD">{data_ref}</span>{sem_preco_str}<br>
+        <span style="color:#4A6B85">Para preços em tempo real seria necessário plano pago da brapi.dev — não habilitado nesta versão.
+        Edite a coluna <em>Preço Atual R$</em> na aba Carteira da planilha e recarregue o dashboard.</span>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Erros de parsing
     erros = portfolio_result.get("erros", [])
