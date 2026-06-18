@@ -141,7 +141,7 @@ from data.sheets_client import (
     get_patrimonio, get_historico_diario,
 )
 from data.portfolio_calc import calc_portfolio
-from data.price_fetcher import get_prices_with_cache
+from data.price_source import carregar_precos_atuais, data_mais_antiga
 from data.snapshot_diario import salvar_snapshot, get_historico
 from components import resumo_executivo, detalhe_ativos, relatorios, nova_operacao
 
@@ -163,18 +163,15 @@ with st.sidebar:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    atualizar = st.button("⟳ Atualizar preços agora", use_container_width=True)
-    if atualizar:
-        get_prices_with_cache.clear() if hasattr(get_prices_with_cache, "clear") else None
-        from data.price_fetcher import fetch_prices
-        fetch_prices.clear()
+    if st.button("⟳ Recarregar dados", use_container_width=True):
+        st.cache_data.clear()
         st.rerun()
 
     st.markdown("""
     <div style="margin-top:40px;color:#1A3550;font-size:10px;font-family:monospace">
-        Preços: brapi.dev<br>
+        Preços: manual (planilha)<br>
         Dados: Google Sheets<br>
-        Cache: 1h (preços) / 5min (ops)
+        Cache: 5min
     </div>
     """, unsafe_allow_html=True)
 
@@ -208,18 +205,9 @@ with st.spinner("Carregando dados..."):
 portfolio_result = calc_portfolio(df_ops)
 positions = portfolio_result.get("positions", {})
 
-# Buscar preços
-tickers_com_posicao = [tk for tk, p in positions.items() if p["qtd"] > 0]
-# Adicionar tickers do cadastro que podem não ter posição ainda
-tickers_cadastrados = df_cart_estatica["TICKER"].dropna().str.upper().tolist() if not df_cart_estatica.empty else []
-all_tickers = list(set(tickers_com_posicao + tickers_cadastrados))
-
-prices: dict = {}
-ultima_atualizacao: str | None = None
-if all_tickers:
-    prices = get_prices_with_cache(all_tickers)
-    timestamps = [p.get("timestamp") for p in prices.values() if p.get("timestamp")]
-    ultima_atualizacao = max(timestamps) if timestamps else None
+# Carregar preços manuais da planilha (sem chamada de rede)
+prices: dict = carregar_precos_atuais(df_cart_estatica)
+ultima_atualizacao: str | None = data_mais_antiga(prices)
 
 # Montar df_carteira calculado (para relatórios)
 cart_rows = []
