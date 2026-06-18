@@ -8,6 +8,42 @@ import pandas as pd
 from datetime import datetime, date
 
 
+def _parse_number(val) -> float | None:
+    """
+    Converte um valor para float tratando formatos brasileiros.
+    - int/float nativos: retorna direto
+    - "9,50"   → 9.5
+    - "1.234,56" → 1234.56  (ponto = milhar, vírgula = decimal)
+    - "R$ 9,50" → 9.5
+    - "9.50"   → 9.5
+    Retorna None se não for conversível.
+    """
+    if val is None or val == "":
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    # Remove símbolos de moeda e espaços
+    for sym in ("R$", "$", "€", "£"):
+        s = s.replace(sym, "")
+    s = s.strip()
+    if s == "" or s.lower() in ("nan", "none", "-"):
+        return None
+    # Detecta formato BR: tem ponto E vírgula → ponto é milhar, vírgula é decimal
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        # Só vírgula → é separador decimal (formato BR)
+        s = s.replace(",", ".")
+    # Só ponto → já é formato anglo (ex: "9.50") ou milhar sem decimal
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def _parse_date(val) -> date | None:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
@@ -62,14 +98,18 @@ def calc_portfolio(df_ops: pd.DataFrame) -> dict:
         if not ticker:
             erros.append(f"Linha {idx+2}: Ticker vazio — ignorada")
             continue
-        if pd.isna(qtd_raw) or qtd_raw == "" or qtd_raw is None:
+        if qtd_raw is None or (isinstance(qtd_raw, float) and pd.isna(qtd_raw)) or qtd_raw == "":
             erros.append(f"Linha {idx+2} ({ticker}): Qtd vazia — ignorada")
             continue
-        try:
-            qtd = float(qtd_raw)
-            preco = float(preco_raw) if preco_raw not in (None, "", "nan") else 0.0
-        except (ValueError, TypeError):
-            erros.append(f"Linha {idx+2} ({ticker}): Qtd/Preço inválido — ignorada")
+
+        qtd = _parse_number(qtd_raw)
+        if qtd is None:
+            erros.append(f"Linha {idx+2} ({ticker}): Qtd '{qtd_raw}' inválida — ignorada")
+            continue
+
+        preco = _parse_number(preco_raw) if preco_raw not in (None, "", "nan") else 0.0
+        if preco is None:
+            erros.append(f"Linha {idx+2} ({ticker}): Preço '{preco_raw}' inválido — ignorada")
             continue
 
         if qtd <= 0:
@@ -101,7 +141,7 @@ def calc_portfolio(df_ops: pd.DataFrame) -> dict:
                     f"Linha {idx+2} ({ticker}): Venda de {qtd} > posição {pos['qtd']:.0f} — ignorada"
                 )
                 continue
-            resultado = qtd * (preco - pos["preco_medio"])
+            resultado = qtd * (float(preco) - pos["preco_medio"])
             pos["resultado_realizado"] += resultado
             resultado_total += resultado
             pos["qtd"] -= qtd
