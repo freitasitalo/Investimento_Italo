@@ -50,13 +50,22 @@ def get_operacoes() -> pd.DataFrame:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_carteira_estatica() -> pd.DataFrame:
-    """Retorna apenas TICKER, EMPRESA, SETOR, DY% 12m — colunas estáticas do cadastro."""
+    """
+    Retorna colunas estáticas do cadastro + preço manual do usuário:
+    TICKER, EMPRESA, SETOR, DY% 12m, Preço Atual R$, Data Atualização Preço
+    """
     ws = _get_sheet().worksheet(ABA_CARTEIRA)
     records = ws.get_all_records()
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["TICKER", "EMPRESA", "SETOR", "DY% 12m"])
-    cols = [c for c in ["TICKER", "EMPRESA", "SETOR", "DY% 12m"] if c in df.columns]
+        return pd.DataFrame(columns=[
+            "TICKER", "EMPRESA", "SETOR", "DY% 12m",
+            "Preço Atual R$", "Data Atualização Preço",
+        ])
+    cols = [c for c in [
+        "TICKER", "EMPRESA", "SETOR", "DY% 12m",
+        "Preço Atual R$", "Data Atualização Preço",
+    ] if c in df.columns]
     return df[cols]
 
 
