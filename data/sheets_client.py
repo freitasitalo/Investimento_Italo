@@ -15,10 +15,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-SHEET_NAME = "Carteira_Investimentos"
+SHEET_ID = "1BGqSvBGNV-UBGRXc9tq_yR_7VwW3dUbjXF2umkohRLU"
 
-ABA_OPERACOES = "📋 Operações"
-ABA_CARTEIRA  = "📊 Carteira"
+ABA_OPERACOES  = "📋 Operações"
+ABA_CARTEIRA   = "📊 Carteira"
 ABA_PATRIMONIO = "💰 Patrimônio"
 ABA_HISTORICO  = "📈 Histórico Diário"
 
@@ -32,7 +32,7 @@ def _get_client():
 
 def _get_sheet():
     client = _get_client()
-    return client.open(SHEET_NAME)
+    return client.open_by_key(SHEET_ID)
 
 
 # ── Leitura ────────────────────────────────────────────────────────
