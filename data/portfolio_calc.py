@@ -1,168 +1,133 @@
 """
-Reconstrução de posição, preço médio e resultado realizado
-a partir do histórico de Operações (custo médio — regra RF brasileira).
+Autenticação e leitura/escrita no Google Sheets via gspread.
 """
 
 from __future__ import annotations
+import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
 import pandas as pd
-from datetime import datetime, date
+from datetime import date, datetime
 
 
-def _parse_number(val) -> float | None:
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+SHEET_ID = "1BGqSvBGNV-UBGRXc9tq_yR_7VwW3dUbjXF2umkohRLU"
+
+ABA_OPERACOES  = "📋 Operações"
+ABA_CARTEIRA   = "📊 Carteira"
+ABA_PATRIMONIO = "💰 Patrimônio"
+ABA_HISTORICO  = "📈 Histórico Diário"
+
+
+@st.cache_resource(show_spinner=False)
+def _get_client():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+
+def _get_sheet():
+    client = _get_client()
+    return client.open_by_key(SHEET_ID)
+
+
+# ── Leitura ────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_operacoes() -> pd.DataFrame:
+    ws = _get_sheet().worksheet(ABA_OPERACOES)
+    # UNFORMATTED_VALUE retorna o número bruto (9.5) em vez do texto formatado ("9,50")
+    records = ws.get_all_records(
+        expected_headers=[
+            "Data", "Ticker", "Empresa", "Tipo C/V", "Qtd", "Preço R$", "Total R$", "Observação"
+        ],
+        value_render_option="UNFORMATTED_VALUE",
+    )
+    return pd.DataFrame(records) if records else pd.DataFrame(
+        columns=["Data", "Ticker", "Empresa", "Tipo C/V", "Qtd", "Preço R$", "Total R$", "Observação"]
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_carteira_estatica() -> pd.DataFrame:
     """
-    Converte um valor para float tratando formatos brasileiros.
-    - int/float nativos: retorna direto
-    - "9,50"   → 9.5
-    - "1.234,56" → 1234.56  (ponto = milhar, vírgula = decimal)
-    - "R$ 9,50" → 9.5
-    - "9.50"   → 9.5
-    Retorna None se não for conversível.
+    Retorna colunas estáticas do cadastro + preço manual do usuário:
+    TICKER, EMPRESA, SETOR, DY% 12m, Preço Atual R$, Data Atualização Preço
     """
-    if val is None or val == "":
-        return None
-    if isinstance(val, bool):
-        return None
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip()
-    # Remove símbolos de moeda e espaços
-    for sym in ("R$", "$", "€", "£"):
-        s = s.replace(sym, "")
-    s = s.strip()
-    if s == "" or s.lower() in ("nan", "none", "-"):
-        return None
-    # Detecta formato BR: tem ponto E vírgula → ponto é milhar, vírgula é decimal
-    if "." in s and "," in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        # Só vírgula → é separador decimal (formato BR)
-        s = s.replace(",", ".")
-    # Só ponto → já é formato anglo (ex: "9.50") ou milhar sem decimal
-    try:
-        return float(s)
-    except ValueError:
-        return None
+    ws = _get_sheet().worksheet(ABA_CARTEIRA)
+    records = ws.get_all_records()
+    df = pd.DataFrame(records)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "TICKER", "EMPRESA", "SETOR", "DY% 12m",
+            "Preço Atual R$", "Data Atualização Preço",
+        ])
+    cols = [c for c in [
+        "TICKER", "EMPRESA", "SETOR", "DY% 12m",
+        "Preço Atual R$", "Data Atualização Preço",
+    ] if c in df.columns]
+    return df[cols]
 
 
-def _parse_date(val) -> date | None:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    if isinstance(val, (datetime, date)):
-        return val.date() if isinstance(val, datetime) else val
-    if isinstance(val, (int, float)):
-        # Excel serial date
-        try:
-            return (pd.Timestamp("1899-12-30") + pd.Timedelta(days=int(val))).date()
-        except Exception:
-            return None
-    if isinstance(val, str):
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-            try:
-                return datetime.strptime(val.strip(), fmt).date()
-            except ValueError:
-                continue
-    return None
+@st.cache_data(ttl=300, show_spinner=False)
+def get_patrimonio() -> pd.DataFrame:
+    ws = _get_sheet().worksheet(ABA_PATRIMONIO)
+    records = ws.get_all_records()
+    return pd.DataFrame(records) if records else pd.DataFrame(
+        columns=["Categoria", "Valor R$", "% do Total", "Observação"]
+    )
 
 
-def calc_portfolio(df_ops: pd.DataFrame) -> dict:
-    """
-    Recebe DataFrame com colunas:
-        Data | Ticker | Empresa | Tipo C/V | Qtd | Preço R$ | Total R$ | Observação
-
-    Retorna dict com:
-        positions       -> {ticker: {qtd, preco_medio, total_investido, resultado_realizado}}
-        resultado_total_realizado -> float
-        erros           -> [str]  linhas ignoradas com motivo
-    """
-    positions: dict[str, dict] = {}
-    resultado_total = 0.0
-    erros: list[str] = []
-
-    required = {"Ticker", "Tipo C/V", "Qtd", "Preço R$"}
-    missing = required - set(df_ops.columns)
-    if missing:
-        return {"positions": {}, "resultado_total_realizado": 0.0,
-                "erros": [f"Colunas ausentes: {missing}"]}
-
-    df = df_ops.copy()
-    df["_data_parsed"] = df["Data"].apply(_parse_date)
-    df = df.sort_values("_data_parsed", na_position="last")
-
-    for idx, row in df.iterrows():
-        ticker = str(row.get("Ticker", "")).strip().upper()
-        tipo   = str(row.get("Tipo C/V", "")).strip().upper()
-        qtd_raw = row.get("Qtd")
-        preco_raw = row.get("Preço R$")
-
-        # Validações
-        if not ticker:
-            erros.append(f"Linha {idx+2}: Ticker vazio — ignorada")
-            continue
-        if qtd_raw is None or (isinstance(qtd_raw, float) and pd.isna(qtd_raw)) or qtd_raw == "":
-            erros.append(f"Linha {idx+2} ({ticker}): Qtd vazia — ignorada")
-            continue
-
-        qtd = _parse_number(qtd_raw)
-        if qtd is None:
-            erros.append(f"Linha {idx+2} ({ticker}): Qtd '{qtd_raw}' inválida — ignorada")
-            continue
-
-        preco = _parse_number(preco_raw) if preco_raw not in (None, "", "nan") else 0.0
-        if preco is None:
-            erros.append(f"Linha {idx+2} ({ticker}): Preço '{preco_raw}' inválido — ignorada")
-            continue
-
-        if qtd <= 0:
-            erros.append(f"Linha {idx+2} ({ticker}): Qtd <= 0 — ignorada")
-            continue
-
-        total = qtd * preco  # recalcula sempre; ignora coluna Total R$
-
-        if ticker not in positions:
-            positions[ticker] = {
-                "empresa": str(row.get("Empresa", "")).strip(),
-                "qtd": 0.0,
-                "preco_medio": 0.0,
-                "total_investido": 0.0,
-                "resultado_realizado": 0.0,
-            }
-
-        pos = positions[ticker]
-
-        if tipo == "C":
-            novo_total = pos["qtd"] * pos["preco_medio"] + total
-            pos["qtd"] += qtd
-            pos["preco_medio"] = novo_total / pos["qtd"] if pos["qtd"] > 0 else 0.0
-            pos["total_investido"] = pos["qtd"] * pos["preco_medio"]
-
-        elif tipo == "V":
-            if qtd > pos["qtd"]:
-                erros.append(
-                    f"Linha {idx+2} ({ticker}): Venda de {qtd} > posição {pos['qtd']:.0f} — ignorada"
-                )
-                continue
-            resultado = qtd * (float(preco) - pos["preco_medio"])
-            pos["resultado_realizado"] += resultado
-            resultado_total += resultado
-            pos["qtd"] -= qtd
-            pos["total_investido"] = pos["qtd"] * pos["preco_medio"]
-            if pos["qtd"] <= 0:
-                pos["qtd"] = 0.0
-                pos["preco_medio"] = 0.0
-                pos["total_investido"] = 0.0
-
-        else:
-            erros.append(f"Linha {idx+2} ({ticker}): Tipo '{tipo}' desconhecido — ignorada")
-
-    # Remover posições zeradas do resultado final mas manter histórico de resultado realizado
-    return {
-        "positions": positions,
-        "resultado_total_realizado": resultado_total,
-        "erros": erros,
-    }
+@st.cache_data(ttl=60, show_spinner=False)
+def get_historico_diario() -> pd.DataFrame:
+    ws = _get_sheet().worksheet(ABA_HISTORICO)
+    records = ws.get_all_records()
+    return pd.DataFrame(records) if records else pd.DataFrame(
+        columns=["Data", "Valor Total Ações", "Valor Total RF", "Patrimônio Total"]
+    )
 
 
-def get_available_qty(ticker: str, df_ops: pd.DataFrame) -> float:
-    result = calc_portfolio(df_ops)
-    pos = result["positions"].get(ticker.upper())
-    return pos["qtd"] if pos else 0.0
+# ── Escrita ────────────────────────────────────────────────────────
+
+def append_operacao(data: date, ticker: str, empresa: str, tipo: str,
+                    qtd: float, preco: float, obs: str = "") -> None:
+    total = round(qtd * preco, 2)
+    ws = _get_sheet().worksheet(ABA_OPERACOES)
+    row = [
+        data.strftime("%Y-%m-%d"),
+        ticker.upper(),
+        empresa,
+        tipo.upper(),
+        qtd,
+        round(preco, 2),
+        total,
+        obs,
+    ]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+    st.cache_data.clear()
+
+
+def upsert_historico_diario(valor_acoes: float, valor_rf: float, patrimonio_total: float) -> None:
+    ws = _get_sheet().worksheet(ABA_HISTORICO)
+    hoje = date.today().strftime("%Y-%m-%d")
+    records = ws.get_all_values()
+
+    # Procura linha com a data de hoje
+    row_idx = None
+    for i, row in enumerate(records[1:], start=2):  # skip header
+        if row and row[0] == hoje:
+            row_idx = i
+            break
+
+    new_row = [hoje, round(valor_acoes, 2), round(valor_rf, 2), round(patrimonio_total, 2)]
+
+    if row_idx:
+        ws.update(f"A{row_idx}:D{row_idx}", [new_row])
+    else:
+        ws.append_row(new_row, value_input_option="USER_ENTERED")
+
+    get_historico_diario.clear()
