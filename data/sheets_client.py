@@ -152,9 +152,15 @@ def atualizar_preco_carteira(ticker: str, preco: float) -> None:
     from gspread.utils import rowcol_to_a1
     hoje = date.today().strftime("%d/%m/%Y")
 
-    ws.update_cell(row_idx, col_preco, preco)
+    # Envia como string BR ("39,18") + USER_ENTERED para o Sheets interpretar
+    # conforme a locale pt-BR da planilha (vírgula = decimal)
+    preco_br = ("%.2f" % preco).replace(".", ",")
+    col_preco_a1 = rowcol_to_a1(row_idx, col_preco)
+    ws.update([[preco_br]], col_preco_a1, value_input_option="USER_ENTERED")
+
     if col_data:
-        ws.update_cell(row_idx, col_data, hoje)
+        col_data_a1 = rowcol_to_a1(row_idx, col_data)
+        ws.update([[hoje]], col_data_a1, value_input_option="USER_ENTERED")
 
     get_carteira_estatica.clear()
 
