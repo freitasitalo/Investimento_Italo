@@ -111,6 +111,54 @@ def append_operacao(data: date, ticker: str, empresa: str, tipo: str,
     st.cache_data.clear()
 
 
+def atualizar_preco_carteira(ticker: str, preco: float) -> None:
+    """
+    Atualiza 'Preco Atual R$' e 'Data Atualizacao Preco' para o ticker
+    na aba Carteira. Encontra a linha pelo TICKER (coluna A) e atualiza
+    as colunas correspondentes pelo nome do cabecalho.
+    Raises ValueError se o ticker nao for encontrado.
+    """
+    ws = _get_sheet().worksheet(ABA_CARTEIRA)
+    headers = ws.row_values(1)
+
+    # Localiza indices das colunas (1-based para gspread)
+    try:
+        col_ticker = headers.index("TICKER") + 1
+    except ValueError:
+        raise ValueError("Coluna TICKER nao encontrada na aba Carteira")
+
+    col_preco = None
+    col_data  = None
+    for i, h in enumerate(headers, 1):
+        if h in ("Preco Atual R$", "Preço Atual R$"):
+            col_preco = i
+        if h in ("Data Atualizacao Preco", "Data Atualização Preço"):
+            col_data = i
+
+    if col_preco is None:
+        raise ValueError("Coluna 'Preco Atual R$' nao encontrada na aba Carteira")
+
+    # Encontra a linha do ticker
+    ticker_col_vals = ws.col_values(col_ticker)
+    row_idx = None
+    for i, val in enumerate(ticker_col_vals[1:], start=2):
+        if str(val).strip().upper() == ticker.upper():
+            row_idx = i
+            break
+
+    if row_idx is None:
+        raise ValueError("Ticker %s nao encontrado na aba Carteira" % ticker)
+
+    from gspread.utils import rowcol_to_a1
+    hoje = date.today().strftime("%d/%m/%Y")
+
+    ws.update_cell(row_idx, col_preco, preco)
+    if col_data:
+        ws.update_cell(row_idx, col_data, hoje)
+
+    get_carteira_estatica.clear()
+
+
 def upsert_historico_diario(valor_acoes: float, valor_rf: float, patrimonio_total: float) -> None:
     ws = _get_sheet().worksheet(ABA_HISTORICO)
     hoje = date.today().strftime("%Y-%m-%d")
