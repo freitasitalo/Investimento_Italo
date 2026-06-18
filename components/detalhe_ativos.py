@@ -4,6 +4,7 @@ Página 2 — Tabela detalhada de ativos.
 
 import streamlit as st
 import pandas as pd
+from data.price_source import status_preco
 
 
 def _fmt_brl(val) -> str:
@@ -53,7 +54,8 @@ def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: d
 
         preco_info = prices.get(tk, {})
         preco_atual = preco_info.get("preco")
-        tem_erro_preco = preco_info.get("erro") is not None
+        icone_status, msg_status = status_preco(preco_info)
+        tem_aviso_preco = bool(icone_status)
 
         valor_atual = (qtd * preco_atual) if preco_atual and qtd > 0 else total_inv
         resultado_r = valor_atual - total_inv
@@ -72,7 +74,8 @@ def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: d
             "Result. R$": resultado_r,
             "Result. %": resultado_pct,
             "DY% 12m": row.get("DY% 12m", ""),
-            "Preço Desatualizado": tem_erro_preco and qtd > 0,
+            "Aviso Preco": icone_status if (tem_aviso_preco and qtd > 0) else "",
+            "Msg Preco": msg_status if (tem_aviso_preco and qtd > 0) else "",
         })
 
     df = pd.DataFrame(rows)
@@ -83,11 +86,20 @@ def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: d
         lambda v: round(v / total_rv * 100, 2) if total_rv > 0 else 0.0
     )
 
-    # Aviso preços desatualizados
-    desatual = df[df["Preço Desatualizado"]]
-    if not desatual.empty:
-        tks = ", ".join(desatual["Ticker"].tolist())
-        st.warning(f"⚠ Preço pode estar desatualizado — fonte indisponível: **{tks}**")
+    # Avisos de defasagem por ticker
+    sem_preco = df[(df["Aviso Preco"] == "⚫") & (df["Qtd"] > 0)]
+    desatual_grave = df[(df["Aviso Preco"] == "🔴") & (df["Qtd"] > 0)]
+    desatual_leve  = df[(df["Aviso Preco"] == "⚠") & (df["Qtd"] > 0)]
+
+    if not sem_preco.empty:
+        tks = ", ".join(sem_preco["Ticker"].tolist())
+        st.error(f"⚫ Sem preço preenchido: **{tks}** — edite a coluna *Preço Atual R$* na planilha.")
+    if not desatual_grave.empty:
+        msgs = [f"{r['Ticker']} ({r['Msg Preco']})" for _, r in desatual_grave.iterrows()]
+        st.error("🔴 " + " | ".join(msgs) + " — atualize na planilha.")
+    if not desatual_leve.empty:
+        msgs = [f"{r['Ticker']} ({r['Msg Preco']})" for _, r in desatual_leve.iterrows()]
+        st.warning("⚠ " + " | ".join(msgs))
 
     # Filtros
     col_f1, col_f2 = st.columns([2, 1])
@@ -119,7 +131,11 @@ def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: d
                 return f'<span style="color:{c}">{s}{f:.2f}%</span>'
             except: return "—"
 
-        pa_str = brl(r["Preço Atual"]) if r["Preço Atual"] else '<span style="color:#FF9800">—*</span>'
+        av = r["Aviso Preco"]
+        if r["Preço Atual"]:
+            pa_str = f'{brl(r["Preço Atual"])} <span style="font-size:10px" title="{r["Msg Preco"]}">{av}</span>'
+        else:
+            pa_str = f'<span style="color:#FF9800">— {av}</span>'
         res_html = f'<span style="color:{"#00E676" if r["Result. R$"]>=0 else "#FF5252"}">{brl(r["Result. R$"])}</span>'
 
         html_rows += f"""<tr>
@@ -160,7 +176,7 @@ def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: d
     </tr></thead>
     <tbody>{html_rows}</tbody>
     </table></div>
-    <div style="color:#4A6B85;font-size:10px;margin-top:6px;font-family:monospace">* Preço desatualizado — fonte indisponível</div>
+    <div style="color:#4A6B85;font-size:10px;margin-top:6px;font-family:monospace">⚠ amarelo = atualizado há 8–30 dias | 🔴 vermelho = +30 dias | ⚫ = sem preço preenchido</div>
     """
 
     st.markdown(table_html, unsafe_allow_html=True)
