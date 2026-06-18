@@ -207,7 +207,7 @@ positions = portfolio_result.get("positions", {})
 
 # Carregar preços manuais da planilha (sem chamada de rede)
 prices: dict = carregar_precos_atuais(df_cart_estatica)
-ultima_atualizacao: str | None = data_mais_antiga(prices)
+ultima_atualizacao= data_mais_antiga(prices)
 
 # Montar df_carteira calculado (para relatórios)
 cart_rows = []
