@@ -52,7 +52,7 @@ def get_operacoes() -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_carteira_estatica() -> pd.DataFrame:
     """
     Retorna colunas estáticas do cadastro + preço manual do usuário:
@@ -113,23 +113,27 @@ def append_operacao(data: date, ticker: str, empresa: str, tipo: str,
 
 def atualizar_preco_carteira(ticker: str, preco: float) -> None:
     """
-    Atualiza 'Preco Atual R$' e 'Data Atualizacao Preco' para o ticker
-    na aba Carteira. Encontra a linha pelo TICKER (coluna A) e atualiza
-    as colunas correspondentes pelo nome do cabecalho.
-    Raises ValueError se o ticker nao for encontrado.
+    Atualiza 'Preco Atual R$' e 'Data Atualizacao Preco' na aba Carteira.
+    Usa uma unica chamada de leitura (get_all_values) para evitar quota 429.
     """
-    ws = _get_sheet().worksheet(ABA_CARTEIRA)
-    headers = ws.row_values(1)
+    from gspread.utils import rowcol_to_a1
 
-    # Localiza indices das colunas (1-based para gspread)
+    ws = _get_sheet().worksheet(ABA_CARTEIRA)
+    # Uma unica leitura — headers + todas as linhas de uma vez
+    all_values = ws.get_all_values()
+    if not all_values:
+        raise ValueError("Aba Carteira vazia")
+
+    headers = all_values[0]
+
     try:
-        col_ticker = headers.index("TICKER") + 1
+        col_ticker = headers.index("TICKER")
     except ValueError:
         raise ValueError("Coluna TICKER nao encontrada na aba Carteira")
 
     col_preco = None
     col_data  = None
-    for i, h in enumerate(headers, 1):
+    for i, h in enumerate(headers):
         if h in ("Preco Atual R$", "Preço Atual R$"):
             col_preco = i
         if h in ("Data Atualizacao Preco", "Data Atualização Preço"):
@@ -138,30 +142,24 @@ def atualizar_preco_carteira(ticker: str, preco: float) -> None:
     if col_preco is None:
         raise ValueError("Coluna 'Preco Atual R$' nao encontrada na aba Carteira")
 
-    # Encontra a linha do ticker
-    ticker_col_vals = ws.col_values(col_ticker)
     row_idx = None
-    for i, val in enumerate(ticker_col_vals[1:], start=2):
-        if str(val).strip().upper() == ticker.upper():
+    for i, row in enumerate(all_values[1:], start=2):
+        if len(row) > col_ticker and row[col_ticker].strip().upper() == ticker.upper():
             row_idx = i
             break
 
     if row_idx is None:
         raise ValueError("Ticker %s nao encontrado na aba Carteira" % ticker)
 
-    from gspread.utils import rowcol_to_a1
-    hoje = date.today().strftime("%d/%m/%Y")
-
-    # Envia como string BR ("39,18") + USER_ENTERED para o Sheets interpretar
-    # conforme a locale pt-BR da planilha (vírgula = decimal)
+    hoje    = date.today().strftime("%d/%m/%Y")
     preco_br = ("%.2f" % preco).replace(".", ",")
-    col_preco_a1 = rowcol_to_a1(row_idx, col_preco)
-    ws.update([[preco_br]], col_preco_a1, value_input_option="USER_ENTERED")
 
-    if col_data:
-        col_data_a1 = rowcol_to_a1(row_idx, col_data)
-        ws.update([[hoje]], col_data_a1, value_input_option="USER_ENTERED")
+    # Monta uma unica chamada batch para preco + data (2 writes em vez de 2 separados)
+    updates = [{"range": rowcol_to_a1(row_idx, col_preco + 1), "values": [[preco_br]]}]
+    if col_data is not None:
+        updates.append({"range": rowcol_to_a1(row_idx, col_data + 1), "values": [[hoje]]})
 
+    ws.batch_update(updates, value_input_option="USER_ENTERED")
     get_carteira_estatica.clear()
 
 
