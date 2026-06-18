@@ -7,20 +7,20 @@ import pandas as pd
 from datetime import datetime
 
 
-def _fmt_brl(val: float | None, prefix="R$ ") -> str:
+def _fmt_brl(val, prefix="R$ "):
     if val is None:
         return "—"
     return f"{prefix}{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def _fmt_pct(val: float | None) -> str:
+def _fmt_pct(val):
     if val is None:
         return "—"
     sinal = "+" if val >= 0 else ""
     return f"{sinal}{val:.2f}%"
 
 
-def _color_result(val: float | None) -> str:
+def _color_result(val):
     if val is None:
         return "#E8F4FD"
     return "#00E676" if val >= 0 else "#FF5252"
@@ -45,7 +45,7 @@ def render_card(col, titulo: str, valor: str, sub: str = "", color: str = "#00D4
 
 def render(portfolio_result: dict, df_carteira: pd.DataFrame,
            df_patrimonio: pd.DataFrame, prices: dict,
-           ultima_atualizacao: str | None):
+           ultima_atualizacao):
 
     st.markdown("## Resumo Executivo")
 
