@@ -5,6 +5,7 @@ Página 2 — Tabela detalhada de ativos.
 import streamlit as st
 import pandas as pd
 from data.price_source import status_preco
+from data.sheets_client import atualizar_preco_carteira
 
 
 def _fmt_brl(val) -> str:
@@ -31,6 +32,80 @@ def _color_html(val, text) -> str:
     except (TypeError, ValueError):
         color = "#E8F4FD"
     return f'<span style="color:{color}">{text}</span>'
+
+
+def _parse_preco_br(texto: str):
+    """Converte '39,18' ou '39.18' para float. Retorna None se inválido."""
+    s = texto.strip().replace("R$", "").replace(" ", "")
+    if not s:
+        return None
+    # formato BR: 1.234,56
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        v = float(s)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _painel_atualizar_precos(tickers_com_posicao: list, prices: dict) -> None:
+    """Painel expansível para atualizar preços diretamente no Sheets."""
+    # Calcula quantos estão sem preço ou desatualizados para mostrar no label
+    sem_preco = [tk for tk in tickers_com_posicao if prices.get(tk, {}).get("preco") is None]
+    label_badge = f"  ·  {len(sem_preco)} sem preço" if sem_preco else ""
+
+    with st.expander(f"✏  Atualizar Preços{label_badge}", expanded=bool(sem_preco)):
+        st.markdown(
+            '<div style="color:#7A9BB5;font-size:11px;font-family:monospace;margin-bottom:12px">'
+            'Digite o preço atual de cada ativo. Use <strong style="color:#E8F4FD">vírgula</strong> '
+            'como separador decimal (ex: 39,18). O valor é gravado direto na planilha.</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Grade: 4 tickers por linha
+        chunk_size = 4
+        for i in range(0, len(tickers_com_posicao), chunk_size):
+            chunk = tickers_com_posicao[i : i + chunk_size]
+            cols = st.columns(len(chunk))
+            for col, tk in zip(cols, chunk):
+                info = prices.get(tk, {})
+                preco_atual = info.get("preco")
+                icone, _ = status_preco(info)
+
+                # Valor padrão no input: preço atual formatado com vírgula
+                default_val = ""
+                if preco_atual is not None:
+                    default_val = f"{preco_atual:.2f}".replace(".", ",")
+
+                cor_label = "#FF5252" if icone == "⚫" else ("#F0B429" if icone in ("⚠", "\U0001f534") else "#00D4FF")
+                col.markdown(
+                    f'<div style="color:{cor_label};font-size:12px;font-family:monospace;'
+                    f'font-weight:600;margin-bottom:4px">{tk} {icone}</div>',
+                    unsafe_allow_html=True,
+                )
+                novo_valor = col.text_input(
+                    tk,
+                    value=default_val,
+                    placeholder="0,00",
+                    label_visibility="collapsed",
+                    key=f"preco_input_{tk}",
+                )
+
+                if col.button("Salvar", key=f"btn_preco_{tk}", use_container_width=True):
+                    parsed = _parse_preco_br(novo_valor)
+                    if parsed is None:
+                        col.error("Valor inválido")
+                    else:
+                        try:
+                            atualizar_preco_carteira(tk, parsed)
+                            col.success("✓ Salvo")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            col.error(str(e))
 
 
 def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: dict):
@@ -79,6 +154,10 @@ def render(portfolio_result: dict, df_carteira_estatica: pd.DataFrame, prices: d
         })
 
     df = pd.DataFrame(rows)
+
+    # Painel de atualização de preços (todos os tickers com posição)
+    tickers_posicao = df[df["Qtd"] > 0]["Ticker"].tolist()
+    _painel_atualizar_precos(tickers_posicao, prices)
 
     # % na carteira
     total_rv = df[df["Qtd"] > 0]["Valor Atual"].sum()
